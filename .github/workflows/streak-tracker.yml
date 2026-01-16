@@ -1,0 +1,108 @@
+name: Daily Streak Tracker
+
+on:
+  schedule:
+    - cron: '0 0 * * *'  # Runs daily at midnight UTC
+  workflow_dispatch:      # Allows manual trigger
+  push:
+    branches: [ main ]
+
+jobs:
+  track-streak:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # Important for pushing changes
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+      
+      - name: Create streak tracker script
+        run: |
+          # Create a simple Python script to track streak
+          cat > track_streak.py << 'EOF'
+          import requests
+          import json
+          import os
+          from datetime import datetime
+          
+          # Get GitHub username from environment or default
+          username = os.environ.get('GITHUB_ACTOR', 'octocat')
+          print(f"Tracking streak for: {username}")
+          
+          try:
+              # Try to fetch GitHub data (simplified)
+              response = requests.get(f'https://api.github.com/users/{username}/events/public')
+              events = response.json()
+              
+              # Count today's events
+              today = datetime.now().strftime('%Y-%m-%d')
+              today_events = sum(1 for event in events if event.get('created_at', '').startswith(today))
+              
+              # Create streak data
+              streak_data = {
+                  'username': username,
+                  'date': today,
+                  'has_contribution': today_events > 0,
+                  'event_count': today_events,
+                  'tracked_at': datetime.now().isoformat()
+              }
+              
+              print(f"Today's activity: {today_events} events")
+              
+              # Load existing data or create new
+              if os.path.exists('streak-data.json'):
+                  with open('streak-data.json', 'r') as f:
+                      data = json.load(f)
+              else:
+                  data = {'history': []}
+              
+              # Add today's data
+              data['history'].append(streak_data)
+              data['last_updated'] = datetime.now().isoformat()
+              
+              # Save to file
+              with open('streak-data.json', 'w') as f:
+                  json.dump(data, f, indent=2)
+              
+              print("✅ Streak data saved!")
+              
+          except Exception as e:
+              print(f"⚠️ Error: {e}")
+              # Create minimal data file
+              minimal_data = {
+                  'history': [{
+                      'username': username,
+                      'date': today,
+                      'has_contribution': False,
+                      'tracked_at': datetime.now().isoformat(),
+                      'note': 'Error fetching data'
+                  }]
+              }
+              with open('streak-data.json', 'w') as f:
+                  json.dump(minimal_data, f, indent=2)
+          
+          # Also create a simple log
+          with open('streak-log.txt', 'a') as f:
+              f.write(f"{datetime.now().isoformat()}: Tracked streak for {username}\n")
+          EOF
+      
+      - name: Run streak tracker
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python track_streak.py
+      
+      - name: Commit and push changes
+        run: |
+          git config --global user.name 'GitHub Actions Bot'
+          git config --global user.email 'actions@github.com'
+          git add streak-data.json streak-log.txt
+          git diff --quiet && git diff --staged --quiet || git commit -m "📅 Update streak data for $(date +'%Y-%m-%d')"
+          git push
